@@ -1,22 +1,20 @@
 <?php
+
 use Phalcon\Loader;
 use Phalcon\Mvc\Micro;
+use Phalcon\Mvc\Micro\Collection as MicroCollection;
 use Phalcon\Di\FactoryDefault;
 use Phalcon\Db\Adapter\Pdo\Mysql as PdoMysql;
-use Phalcon\Mvc\Micro\Collection as MicroCollection;
 
 // Use Loader() to autoload our model
 $loader = new Loader();
-$loader->registerNamespaces(
-    array(
-        'Controllers' => __DIR__ . '\controllers'
-    )
-)->register();
 $loader->registerDirs(
     array(
-        __DIR__ . '/models/'
+		'models',
+		'controllers'
     )
 )->register();
+$loader->setExtensions(array("php", "inc", "phb"));
 
 $di = new FactoryDefault();
 
@@ -32,38 +30,213 @@ $di->set('db', function () {
     );
 });
 
-// Create and bind the DI to the application
 $app = new Micro($di);
+$users = new MicroCollection();
+$users->setHandler("UserController", true);
+$users->setPrefix('/user');
+$users->get('/', 'hello');
+$app->mount($users);
+// Retrieves all robots
+$app->get('/api/robots', function () {
+	$phql = "SELECT * FROM Robots ORDER BY name";
+    $robots = $app->modelsManager->executeQuery($phql);
 
-$posts = new MicroCollection();
+    $data = array();
+    foreach ($robots as $robot) {
+        $data[] = array(
+            'id'   => $robot->id,
+            'name' => $robot->name
+        );
+    }
 
-// Set the main handler. ie. a controller instance
-$posts->setHandler('Controllers\PostController', true);
-
-// Set a common prefix for all routes
-$posts->setPrefix('/posts');
-
-// Use the method 'index' in PostsController
-$posts->get('/', 'index');
-
-// Use the method 'show' in PostsController
-$posts->get('/show/{slug}', 'show');
-
-$app->get('/hello-world/{name}', function ($name) use($app) {	
-	/* example returning response
-    $response = new Response();
-
-    $response->setStatusCode(401, "Unauthorized");
-
-    $response->setContent("Access is not authorized");
-	*/
-    echo "<h1>Welcome $name!</h1>";
+    echo json_encode($data);
 });
 
-$app->notFound(function () use ($app) {
-    $app->response->setStatusCode(404, "Not Found")->sendHeaders();
-    echo 'This is crazy, but this page was not found!';
+// Searches for robots with $name in their name
+$app->get('/api/robots/search/{name}', function ($name) {
+	$phql = "SELECT * FROM Robots WHERE name LIKE :name: ORDER BY name";
+    $robots = $app->modelsManager->executeQuery(
+        $phql,
+        array(
+            'name' => '%' . $name . '%'
+        )
+    );
+
+    $data = array();
+    foreach ($robots as $robot) {
+        $data[] = array(
+            'id'   => $robot->id,
+            'name' => $robot->name
+        );
+    }
+
+    echo json_encode($data);
+});
+
+// Retrieves robots based on primary key
+$app->get('/api/robots/{id:[0-9]+}', function ($id) {
+	$phql = "SELECT * FROM Robots WHERE id = :id:";
+    $robot = $app->modelsManager->executeQuery($phql, array(
+        'id' => $id
+    ))->getFirst();
+
+    // Create a response
+    $response = new Response();
+
+    if ($robot == false) {
+        $response->setJsonContent(
+            array(
+                'status' => 'NOT-FOUND'
+            )
+        );
+    } else {
+        $response->setJsonContent(
+            array(
+                'status' => 'FOUND',
+                'data'   => array(
+                    'id'   => $robot->id,
+                    'name' => $robot->name
+                )
+            )
+        );
+    }
+
+    return $response;
+});
+
+// Adds a new robot
+$app->post('/api/robots', function () use ($app) {
+
+    $robot = $app->request->getJsonRawBody();
+
+    $phql = "INSERT INTO Robots (name, type, year) VALUES (:name:, :type:, :year:)";
+
+    $status = $app->modelsManager->executeQuery($phql, array(
+        'name' => $robot->name,
+        'type' => $robot->type,
+        'year' => $robot->year
+    ));
+
+    // Create a response
+    $response = new Response();
+
+    // Check if the insertion was successful
+    if ($status->success() == true) {
+
+        // Change the HTTP status
+        $response->setStatusCode(201, "Created");
+
+        $robot->id = $status->getModel()->id;
+
+        $response->setJsonContent(
+            array(
+                'status' => 'OK',
+                'data'   => $robot
+            )
+        );
+
+    } else {
+
+        // Change the HTTP status
+        $response->setStatusCode(409, "Conflict");
+
+        // Send errors to the client
+        $errors = array();
+        foreach ($status->getMessages() as $message) {
+            $errors[] = $message->getMessage();
+        }
+
+        $response->setJsonContent(
+            array(
+                'status'   => 'ERROR',
+                'messages' => $errors
+            )
+        );
+    }
+
+    return $response;
+});
+
+// Updates robots based on primary key
+$app->put('/api/robots/{id:[0-9]+}', function ($id) use ($app) {
+
+    $robot = $app->request->getJsonRawBody();
+
+    $phql = "UPDATE Robots SET name = :name:, type = :type:, year = :year: WHERE id = :id:";
+    $status = $app->modelsManager->executeQuery($phql, array(
+        'id' => $id,
+        'name' => $robot->name,
+        'type' => $robot->type,
+        'year' => $robot->year
+    ));
+
+    // Create a response
+    $response = new Response();
+
+    // Check if the insertion was successful
+    if ($status->success() == true) {
+        $response->setJsonContent(
+            array(
+                'status' => 'OK'
+            )
+        );
+    } else {
+
+        // Change the HTTP status
+        $response->setStatusCode(409, "Conflict");
+
+        $errors = array();
+        foreach ($status->getMessages() as $message) {
+            $errors[] = $message->getMessage();
+        }
+
+        $response->setJsonContent(
+            array(
+                'status'   => 'ERROR',
+                'messages' => $errors
+            )
+        );
+    }
+
+    return $response;
+});
+
+// Deletes robots based on primary key
+$app->delete('/api/robots/{id:[0-9]+}', function ($id) use ($app) {
+
+    $phql = "DELETE FROM Robots WHERE id = :id:";
+    $status = $app->modelsManager->executeQuery($phql, array(
+        'id' => $id
+    ));
+
+    // Create a response
+    $response = new Response();
+
+    if ($status->success() == true) {
+        $response->setJsonContent(
+            array(
+                'status' => 'OK'
+            )
+        );
+    } else {
+
+        // Change the HTTP status
+        $response->setStatusCode(409, "Conflict");
+
+        $errors = array();
+        foreach ($status->getMessages() as $message) {
+            $errors[] = $message->getMessage();
+        }
+
+        $response->setJsonContent(
+            array(
+                'status'   => 'ERROR',
+                'messages' => $errors
+            )
+        );
+    }
+
+    return $response;
 });
 
 $app->handle();
-?>
